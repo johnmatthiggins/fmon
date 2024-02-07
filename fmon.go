@@ -28,16 +28,25 @@ func deleteEmpty(s []string) []string {
 
 func main() {
 	ignore := buildIgnoreExpression(".gitignore")
-	fmt.Println(ignore)
+	var paths []string
+
 	filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
 		matched, err := regexp.MatchString(ignore, path)
 		if err == nil && !matched && !entry.IsDir() {
-			fmt.Printf("visited path at: %s\n", path)
+			paths = append(paths, path)
 		} else if err != nil {
 			fmt.Println(err)
 		}
 		return nil
 	})
+
+	// steps
+	// 1. walk directories finding all files that have not been excluded by .gitignore.
+	// 2. take md5 hash sum of each file path.
+	// 3. combine hash sums in ordered way and calculate that final hash sum.
+	// 4. Do this every N seconds and run a specified command once the hash has changed.
+
+	fmt.Println(paths)
 }
 
 func buildIgnoreExpression(path string) string {
