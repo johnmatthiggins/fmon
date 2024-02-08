@@ -1,7 +1,5 @@
 package main
 
-// added a comment
-
 import (
 	"crypto/sha1"
 	"encoding/hex"
@@ -21,13 +19,6 @@ import (
 type DirState struct {
 	hashSum   string
 	fileCount int
-}
-
-func handleFile(path string, entry fs.DirEntry, err error) error {
-	if !entry.IsDir() {
-		fmt.Printf("Visited: %s\n", path)
-	}
-	return nil
 }
 
 func deleteEmpty(s []string) []string {
