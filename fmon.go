@@ -48,8 +48,6 @@ func main() {
 	flag.IntVar(&intervalSeconds, "n", 1, "The amount of in seconds time between checks.")
 	flag.Parse()
 
-	fmt.Println(flag.Args())
-
 	var previous DirState = checkForChanges(".")
 	var current DirState = previous
 
@@ -58,6 +56,7 @@ func main() {
 		current = checkForChanges(".")
 
 		if current.fileCount != previous.fileCount || current.hashSum != previous.hashSum {
+			fmt.Println("[FILES CHANGED RUNNING COMMAND]")
 			cmdSegments := strings.Split(command, " ")
 			cmd := exec.Command(cmdSegments[0], cmdSegments[1:]...)
 			stdout, err := cmd.Output()
@@ -67,8 +66,6 @@ func main() {
 			} else {
 				fmt.Println(string(stdout))
 			}
-		} else {
-			fmt.Println("Files are the same...")
 		}
 
 		previous = current
