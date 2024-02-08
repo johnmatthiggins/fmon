@@ -56,7 +56,8 @@ func main() {
 		current = checkForChanges(".")
 
 		if current.fileCount != previous.fileCount || current.hashSum != previous.hashSum {
-			fmt.Println("[FILES CHANGED RUNNING COMMAND]")
+			timestamp := time.Now()
+			fmt.Printf("[%s] cmd = \"%s\"\n", timestamp.Format(time.UnixDate), command)
 			cmdSegments := strings.Split(command, " ")
 			cmd := exec.Command(cmdSegments[0], cmdSegments[1:]...)
 			stdout, err := cmd.Output()
