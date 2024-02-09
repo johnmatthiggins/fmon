@@ -8,3 +8,4 @@ when changes are detected.
 - [ ] Add --help flag.
 - [ ] Refine .gitignore functionality.
 - [x] Kill and rerun long running processes.
+- [ ] Move from polling intetrval architecture to asynchronous event monitoring architecture.
