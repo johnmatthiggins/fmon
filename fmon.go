@@ -11,9 +11,11 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode"
@@ -127,6 +129,7 @@ func runCommand(command string) (*exec.Cmd, error) {
 
 // Here's another comment
 func waitForChanges(command string, matchFn func(path string) bool) {
+	var wg sync.WaitGroup
 	var previous DirState = checkForChanges(".", matchFn)
 	var current DirState = previous
 
@@ -136,31 +139,39 @@ func waitForChanges(command string, matchFn func(path string) bool) {
 		fmt.Printf("Command failed: %s", err)
 	}
 
-	for {
-		time.Sleep(250 * time.Millisecond)
-		current = checkForChanges(".", matchFn)
+	controlSignal := make(chan os.Signal, 1)
+	signal.Notify(controlSignal, os.Interrupt)
+	go func() {
+		_ = <-controlSignal
+		err = safeKill(cmd)
+		if err != nil {
+			log.Fatal(err)
+		}
+		wg.Done()
+	}()
 
-		if current.fileCount != previous.fileCount || current.hashSum != previous.hashSum {
-			// If process hasn't died yet we kill it.
-			if cmd.ProcessState.ExitCode() == -1 {
-				pgid, err := syscall.Getpgid(cmd.Process.Pid)
+	wg.Add(1)
+	go func() {
+		for {
+			time.Sleep(250 * time.Millisecond)
+			current = checkForChanges(".", matchFn)
 
-				// if there are no errors, or the process doesn't exist
-				// anymore, then don't exit process
-				if err == nil {
-					syscall.Kill(-pgid, 15)
-				} else if !errors.Is(err, syscall.ESRCH) {
+			if current.fileCount != previous.fileCount || current.hashSum != previous.hashSum {
+				// If process hasn't died yet we kill it.
+				err = safeKill(cmd)
+				if err != nil {
 					log.Fatal(err)
 				}
+				cmd, err = runCommand(command)
+				if err != nil {
+					fmt.Printf("Command failed: %s", err)
+				}
 			}
-			cmd, err = runCommand(command)
-			if err != nil {
-				fmt.Printf("Command failed: %s", err)
-			}
-		}
 
-		previous = current
-	}
+			previous = current
+		}
+	}()
+	wg.Wait()
 }
 
 func checkForChanges(cwd string, matchFn func(path string) bool) DirState {
@@ -217,4 +228,20 @@ func parseIgnore(path string) ([]string, error) {
 	}
 
 	return ignoreExpressions, nil
+}
+
+func safeKill(cmd *exec.Cmd) error {
+	if cmd.ProcessState.ExitCode() == -1 {
+		pgid, err := syscall.Getpgid(cmd.Process.Pid)
+
+		// if there are no errors, or the process doesn't exist
+		// anymore, then don't exit process
+		if err == nil {
+			syscall.Kill(-pgid, 15)
+		} else if !errors.Is(err, syscall.ESRCH) {
+			return err
+		}
+	}
+
+	return nil
 }
