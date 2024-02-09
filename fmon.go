@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -13,7 +14,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
+	"unicode"
 )
 
 type DirState struct {
@@ -21,42 +24,138 @@ type DirState struct {
 	fileCount int
 }
 
+func main() {
+	var intervalSeconds int
+	var command string
+	var matchRegexp string
+
+	flag.StringVar(&command, "c", "ls", "The shell command to run.")
+	flag.StringVar(&matchRegexp, "E", "", "The match expression. If a change occurs in a file that matches this regex then the command will be run.")
+	flag.IntVar(&intervalSeconds, "n", 1, "The amount of in seconds time between checks.")
+	flag.Parse()
+
+	// If this is false, then we will assume that it is an ignore expression.
+	var useIgnoreFile bool = matchRegexp == ""
+
+	if useIgnoreFile {
+		ignoreExpressions, err := parseIgnore(".gitignore")
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		matchFn := func(path string) bool {
+			return gitIgnoreMatch(ignoreExpressions, path)
+		}
+		waitForChanges(command, matchFn)
+	} else {
+		matchFn := func(path string) bool {
+			match, err := regexp.MatchString(matchRegexp, path)
+			if err != nil {
+				log.Fatal(err)
+			}
+			return match
+		}
+
+		waitForChanges(command, matchFn)
+	}
+
+}
+
+func isWhiteSpace(str string) bool {
+	for _, c := range str {
+		// check if the character is a whitespace character
+		if !unicode.IsSpace(c) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func gitIgnoreMatch(ignoreExpressions []string, path string) bool {
+	var ignorePath bool = false
+	for _, ignore := range ignoreExpressions {
+		if strings.HasPrefix(path, ignore) {
+			ignorePath = true
+			break
+		}
+	}
+
+	return !ignorePath
+}
+
 func deleteEmpty(s []string) []string {
 	var r []string
 	for _, str := range s {
-		if str != "" {
+		if str != "" && !isWhiteSpace(str) {
 			r = append(r, str)
 		}
 	}
 	return r
 }
 
-func main() {
-	var intervalSeconds int
-	var command string
+func runCommand(command string) (*exec.Cmd, error) {
+	timestamp := time.Now()
+	fmt.Printf("[%s] cmd = \"%s\"\n", timestamp.Format(time.UnixDate), command)
+	cmdSegments := strings.Split(command, " ")
+	cmd := exec.Command(cmdSegments[0], cmdSegments[1:]...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	flag.StringVar(&command, "c", "ls", "The shell command to run.")
-	flag.IntVar(&intervalSeconds, "n", 1, "The amount of in seconds time between checks.")
-	flag.Parse()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
 
-	var previous DirState = checkForChanges(".")
+	err = cmd.Start()
+	if err != nil {
+		return nil, err
+	}
+
+	go func() {
+		for {
+			tmp := make([]byte, 0x1000)
+			_, err := stdout.Read(tmp)
+			fmt.Print(string(tmp))
+			if err != nil {
+				break
+			}
+		}
+	}()
+
+	return cmd, nil
+}
+
+// Here's another comment
+func waitForChanges(command string, matchFn func(path string) bool) {
+	var previous DirState = checkForChanges(".", matchFn)
 	var current DirState = previous
 
+	cmd, err := runCommand(command)
+
+	if err != nil {
+		fmt.Printf("Command failed: %s", err)
+	}
+
 	for {
-		time.Sleep(1 * time.Second)
-		current = checkForChanges(".")
+		time.Sleep(250 * time.Millisecond)
+		current = checkForChanges(".", matchFn)
 
 		if current.fileCount != previous.fileCount || current.hashSum != previous.hashSum {
-			timestamp := time.Now()
-			fmt.Printf("[%s] cmd = \"%s\"\n", timestamp.Format(time.UnixDate), command)
-			cmdSegments := strings.Split(command, " ")
-			cmd := exec.Command(cmdSegments[0], cmdSegments[1:]...)
-			stdout, err := cmd.Output()
+			// If process hasn't died yet we kill it.
+			if cmd.ProcessState.ExitCode() == -1 {
+				pgid, err := syscall.Getpgid(cmd.Process.Pid)
 
+				// if there are no errors, or the process doesn't exist
+				// anymore, then don't exit process
+				if err == nil {
+					syscall.Kill(-pgid, 15)
+				} else if !errors.Is(err, syscall.ESRCH) {
+					log.Fatal(err)
+				}
+			}
+			cmd, err = runCommand(command)
 			if err != nil {
-				fmt.Println(err.Error())
-			} else {
-				fmt.Println(string(stdout))
+				fmt.Printf("Command failed: %s", err)
 			}
 		}
 
@@ -64,16 +163,13 @@ func main() {
 	}
 }
 
-func checkForChanges(dirpath string) DirState {
-	ignore := buildIgnoreExpression(".gitignore")
+func checkForChanges(cwd string, matchFn func(path string) bool) DirState {
 	var paths []string
 
-	filepath.WalkDir(dirpath, func(path string, entry fs.DirEntry, err error) error {
-		matched, err := regexp.MatchString(ignore, path)
-		if err == nil && !matched && !entry.IsDir() {
+	filepath.WalkDir(cwd, func(path string, entry fs.DirEntry, err error) error {
+		matched := matchFn(path)
+		if matched && !entry.IsDir() {
 			paths = append(paths, path)
-		} else if err != nil {
-			fmt.Println(err)
 		}
 		return nil
 	})
@@ -82,13 +178,12 @@ func checkForChanges(dirpath string) DirState {
 
 	for _, path := range paths {
 		f, err := os.Open(path)
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer f.Close()
+		if err == nil {
+			defer f.Close()
 
-		if _, err := io.Copy(hash, f); err != nil {
-			log.Fatal(err)
+			if _, err := io.Copy(hash, f); err != nil {
+				log.Fatal(err)
+			}
 		}
 	}
 
@@ -103,19 +198,23 @@ func checkForChanges(dirpath string) DirState {
 	return dirState
 }
 
-func buildIgnoreExpression(path string) string {
+func parseIgnore(path string) ([]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		panic("oh no!")
+		return nil, err
 	}
 
 	text := string(data)
 	expressions := strings.Split(text, "\n")
+	expressions = append(expressions, ".git")
 
-	for i, value := range expressions {
-		expressions[i] = strings.Replace(value, ".", "\\.", -1)
+	var ignoreExpressions = deleteEmpty(expressions)
+
+	for i, expression := range ignoreExpressions {
+		if strings.HasPrefix(expression, "./") {
+			ignoreExpressions[i] = expression[2:]
+		}
 	}
-	var ignoreExpression string = strings.Join(deleteEmpty(expressions), "|")
 
-	return ignoreExpression
+	return ignoreExpressions, nil
 }
