@@ -63,9 +63,10 @@ func main() {
 
 }
 
+// Returns `true` if the string contains only whitespace
+// characters, returns false otherwise.
 func isWhiteSpace(str string) bool {
 	for _, c := range str {
-		// check if the character is a whitespace character
 		if !unicode.IsSpace(c) {
 			return false
 		}
@@ -230,6 +231,7 @@ func parseIgnore(path string) ([]string, error) {
 	return ignoreExpressions, nil
 }
 
+// Kills command process and all child processes.
 func safeKill(cmd *exec.Cmd) error {
 	if cmd.ProcessState.ExitCode() == -1 {
 		pgid, err := syscall.Getpgid(cmd.Process.Pid)
