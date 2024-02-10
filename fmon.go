@@ -27,16 +27,22 @@ type DirState struct {
 }
 
 func main() {
-	var intervalSeconds int
+	var intervalMs time.Duration
 	var command string
 	var matchRegexp string
+	var help bool
 
 	flag.StringVar(&command, "c", "ls", "The shell command to run.")
 	flag.StringVar(&matchRegexp, "E", "", "The match expression. If a change occurs in a file that matches this regex then the command will be run.")
-	flag.IntVar(&intervalSeconds, "n", 1, "The amount of in seconds time between checks.")
+	flag.BoolVar(&help, "h", false, "The flag that pulls up the manual.")
+	flag.DurationVar(&intervalMs, "n", time.Second, "The amount of time in milliseconds between checks.")
 	flag.Parse()
 
-	// If this is false, then we will assume that it is an ignore expression.
+	if help {
+		printHelp()
+		os.Exit(0)
+	}
+
 	var useIgnoreFile bool = matchRegexp == ""
 
 	if useIgnoreFile {
@@ -48,7 +54,7 @@ func main() {
 		matchFn := func(path string) bool {
 			return gitIgnoreMatch(ignoreExpressions, path)
 		}
-		waitForChanges(command, matchFn)
+		waitForChanges(command, matchFn, intervalMs)
 	} else {
 		matchFn := func(path string) bool {
 			match, err := regexp.MatchString(matchRegexp, path)
@@ -58,9 +64,14 @@ func main() {
 			return match
 		}
 
-		waitForChanges(command, matchFn)
+		waitForChanges(command, matchFn, intervalMs)
 	}
 
+}
+
+func printHelp() {
+	fmt.Printf("Usage:\n  fmon [options]\n\nOPTIONS\n")
+	flag.PrintDefaults()
 }
 
 // Returns `true` if the string contains only whitespace
@@ -99,10 +110,13 @@ func deleteEmpty(s []string) []string {
 
 func runCommand(command string) (*exec.Cmd, error) {
 	timestamp := time.Now()
-	fmt.Printf("[%s] cmd = \"%s\"\n", timestamp.Format(time.UnixDate), command)
+
+	fmt.Printf("[%s] cmd = \"%s\"\n", timestamp.Format(time.DateTime), command)
+
 	cmdSegments := strings.Split(command, " ")
 	cmd := exec.Command(cmdSegments[0], cmdSegments[1:]...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Stderr = cmd.Stdout
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -128,11 +142,9 @@ func runCommand(command string) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
-// Here's another comment
-func waitForChanges(command string, matchFn func(path string) bool) {
+func waitForChanges(command string, matchFn func(path string) bool, interval time.Duration) {
 	var wg sync.WaitGroup
-	var previous DirState = checkForChanges(".", matchFn)
-	var current DirState = previous
+	var current DirState = checkForChanges(".", matchFn)
 
 	cmd, err := runCommand(command)
 
@@ -154,10 +166,10 @@ func waitForChanges(command string, matchFn func(path string) bool) {
 	wg.Add(1)
 	go func() {
 		for {
-			time.Sleep(250 * time.Millisecond)
-			current = checkForChanges(".", matchFn)
+			time.Sleep(interval * time.Millisecond)
+			newState := checkForChanges(".", matchFn)
 
-			if current.fileCount != previous.fileCount || current.hashSum != previous.hashSum {
+			if current.fileCount != newState.fileCount || current.hashSum != newState.hashSum {
 				// If process hasn't died yet we kill it.
 				err = safeKill(cmd)
 				if err != nil {
@@ -169,9 +181,10 @@ func waitForChanges(command string, matchFn func(path string) bool) {
 				}
 			}
 
-			previous = current
+			current = newState
 		}
 	}()
+
 	wg.Wait()
 }
 
