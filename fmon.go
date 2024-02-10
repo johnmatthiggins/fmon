@@ -35,7 +35,7 @@ func main() {
 	flag.StringVar(&command, "c", "ls", "The shell command to run.")
 	flag.StringVar(&matchRegexp, "E", "", "The match expression. If a change occurs in a file that matches this regex then the command will be run.")
 	flag.BoolVar(&help, "h", false, "The flag that pulls up the manual.")
-	flag.DurationVar(&intervalMs, "n", time.Second, "The amount of time in milliseconds between checks.")
+	flag.DurationVar(&intervalMs, "n", time.Second, "The amount of time between checking the watched files for changes.")
 	flag.Parse()
 
 	if help {
@@ -166,7 +166,7 @@ func waitForChanges(command string, matchFn func(path string) bool, interval tim
 	wg.Add(1)
 	go func() {
 		for {
-			time.Sleep(interval * time.Millisecond)
+			time.Sleep(interval)
 			newState := checkForChanges(".", matchFn)
 
 			if current.fileCount != newState.fileCount || current.hashSum != newState.hashSum {
