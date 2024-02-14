@@ -22,8 +22,15 @@ import (
 )
 
 type DirState struct {
-	hashSum   string
-	fileCount int
+	Hash      string
+	FileCount int
+}
+
+type ProgramState struct {
+	Command  string
+	MatchFn  func(path string) bool
+	Interval time.Duration
+	Files    []string
 }
 
 func main() {
@@ -32,29 +39,54 @@ func main() {
 	var matchRegexp string
 	var help bool
 
-	flag.StringVar(&command, "c", "ls", "The shell command to run.")
+	flag.StringVar(&command, "c", "", "The shell command to run.")
 	flag.StringVar(&matchRegexp, "E", "", "The match expression. If a change occurs in a file that matches this regex then the command will be run.")
-	flag.BoolVar(&help, "h", false, "The flag that pulls up the manual.")
+	flag.BoolVar(&help, "h", false, "The help flag.")
 	flag.DurationVar(&intervalMs, "n", time.Second, "The amount of time between checking the watched files for changes.")
 	flag.Parse()
+
+	files := flag.Args()
 
 	if help {
 		printHelp()
 		os.Exit(0)
 	}
 
-	var useIgnoreFile bool = matchRegexp == ""
+	if command == "" {
+		fmt.Fprintf(os.Stderr, "Error: command not specified!\n")
+		printHelp()
+		os.Exit(1)
+	}
 
-	if useIgnoreFile {
-		ignoreExpressions, err := parseIgnore(".gitignore")
-		if err != nil {
-			log.Fatal(err)
-		}
+	if matchRegexp == "" {
+		if len(files) > 0 {
+			matchFn := func(path string) bool {
+				return false
+			}
+			state := ProgramState{
+				Command:  command,
+				MatchFn:  matchFn,
+				Interval: intervalMs,
+				Files:    files,
+			}
+			waitForChanges(state)
+		} else {
+			ignoreExpressions, err := parseIgnore(".gitignore")
+			if err != nil {
+				log.Fatal(err)
+			}
 
-		matchFn := func(path string) bool {
-			return gitIgnoreMatch(ignoreExpressions, path)
+			matchFn := func(path string) bool {
+				return gitIgnoreMatch(ignoreExpressions, path)
+			}
+			state := ProgramState{
+				Command:  command,
+				MatchFn:  matchFn,
+				Interval: intervalMs,
+				Files:    files,
+			}
+			waitForChanges(state)
 		}
-		waitForChanges(command, matchFn, intervalMs)
 	} else {
 		matchFn := func(path string) bool {
 			match, err := regexp.MatchString(matchRegexp, path)
@@ -64,13 +96,19 @@ func main() {
 			return match
 		}
 
-		waitForChanges(command, matchFn, intervalMs)
+		state := ProgramState{
+			Command:  command,
+			MatchFn:  matchFn,
+			Interval: intervalMs,
+			Files:    files,
+		}
+		waitForChanges(state)
 	}
 
 }
 
 func printHelp() {
-	fmt.Printf("Usage:\n  fmon [options]\n\nOPTIONS\n")
+	fmt.Printf("Usage:\n  fmon [options] [files...]\n\nOPTIONS\n")
 	flag.PrintDefaults()
 }
 
@@ -142,11 +180,11 @@ func runCommand(command string) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
-func waitForChanges(command string, matchFn func(path string) bool, interval time.Duration) {
+func waitForChanges(state ProgramState) {
 	var wg sync.WaitGroup
-	var current DirState = checkForChanges(".", matchFn)
+	var current DirState = checkForChanges(".", state.MatchFn, state.Files)
 
-	cmd, err := runCommand(command)
+	cmd, err := runCommand(state.Command)
 
 	if err != nil {
 		fmt.Printf("Command failed: %s", err)
@@ -166,16 +204,16 @@ func waitForChanges(command string, matchFn func(path string) bool, interval tim
 	wg.Add(1)
 	go func() {
 		for {
-			time.Sleep(interval)
-			newState := checkForChanges(".", matchFn)
+			time.Sleep(state.Interval)
+			newState := checkForChanges(".", state.MatchFn, state.Files)
 
-			if current.fileCount != newState.fileCount || current.hashSum != newState.hashSum {
+			if current.FileCount != newState.FileCount || current.Hash != newState.Hash {
 				// If process hasn't died yet we kill it.
 				err = safeKill(cmd)
 				if err != nil {
 					log.Fatal(err)
 				}
-				cmd, err = runCommand(command)
+				cmd, err = runCommand(state.Command)
 				if err != nil {
 					fmt.Printf("Command failed: %s", err)
 				}
@@ -188,8 +226,9 @@ func waitForChanges(command string, matchFn func(path string) bool, interval tim
 	wg.Wait()
 }
 
-func checkForChanges(cwd string, matchFn func(path string) bool) DirState {
+func checkForChanges(cwd string, matchFn func(path string) bool, files []string) DirState {
 	var paths []string
+	paths = append(paths, files...)
 
 	filepath.WalkDir(cwd, func(path string, entry fs.DirEntry, err error) error {
 		matched := matchFn(path)
@@ -216,8 +255,8 @@ func checkForChanges(cwd string, matchFn func(path string) bool) DirState {
 	hashString := hex.EncodeToString(sum)
 
 	dirState := DirState{
-		hashSum:   hashString,
-		fileCount: len(paths),
+		Hash:      hashString,
+		FileCount: len(paths),
 	}
 
 	return dirState
