@@ -108,7 +108,7 @@ func main() {
 }
 
 func printHelp() {
-	fmt.Printf("Usage:\n  fmon [options] [files...]\n\nOPTIONS\n")
+	fmt.Fprintf(os.Stderr, "Usage:\n  fmon [options] [files...]\n\nOPTIONS\n")
 	flag.PrintDefaults()
 }
 
