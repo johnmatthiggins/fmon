@@ -34,6 +34,11 @@ type ProgramState struct {
 }
 
 func main() {
+	// * Place a watcher on each file.
+	// * When a file is changed, we traverse the directories
+	//   and figure out which files have been added and add watchers to those files.
+	// * When a file is changed, if it's removed, delete the file from our set of watched files.
+
 	var intervalMs time.Duration
 	var command string
 	var matchRegexp string
